@@ -1,0 +1,129 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>NetLab Quest</title><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{--bg:#f3f1ea;--pn:#fff;--tx:#1d2330;--mu:#667;--ac:#2a7de1;--ok:#1f9d55;--fl:#e4e0d4;--wl:#8a8472;--tm:#0e1420;--tt:#8ff0a4;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#10141c;--pn:#1a2130;--tx:#e8ecf4;--mu:#97a1b5;--ac:#5aa2ff;--ok:#43d17a;--fl:#232c3d;--wl:#4a5670}}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,sans-serif}
+h1{font-size:18px;margin:0}header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px}
+.wrap{display:grid;grid-template-columns:1.3fr 1fr;gap:12px;padding:0 14px 14px}@media(max-width:860px){.wrap{grid-template-columns:1fr}}
+.pn{background:var(--pn);border-radius:12px;padding:12px;border:1px solid var(--wl)}
+#map{position:relative;height:340px;border-radius:10px;overflow:hidden;cursor:pointer;display:grid;grid-template-columns:repeat(3,1fr);border:3px solid var(--wl)}
+.room{background:var(--fl);border-right:4px solid var(--wl);position:relative}.room:last-child{border:0}
+.room b{position:absolute;top:6px;left:8px;font-size:12px;color:var(--mu)}
+.door{position:absolute;top:42%;height:16%;width:8px;background:var(--bg);z-index:1;transform:translateX(-4px)}
+.dev{position:absolute;transform:translate(-50%,-50%);text-align:center;font-size:11px;z-index:2;cursor:pointer;user-select:none}
+.dev i{display:block;font-style:normal;font-size:30px;background:var(--pn);border:2px solid var(--wl);border-radius:10px;padding:2px 8px}.dev.cur i{border-color:var(--ac);box-shadow:0 0 0 3px var(--ac)}
+#me{position:absolute;font-size:28px;transform:translate(-50%,-50%);transition:left .45s linear,top .45s linear;z-index:3;pointer-events:none}
+.tabs button,.btn{background:var(--pn);color:var(--tx);border:1px solid var(--wl);border-radius:8px;padding:6px 12px;cursor:pointer;font:inherit}.btn.p{background:var(--ac);color:#fff;border-color:var(--ac)}
+.tabs{display:flex;gap:6px;margin-bottom:8px}.tabs .on{background:var(--ac);color:#fff}
+.bar{height:8px;background:var(--fl);border-radius:6px;overflow:hidden;margin:6px 0}.bar div{height:100%;background:var(--ok);transition:width .3s}
+#term{background:var(--tm);color:var(--tt);font:13px/1.35 ui-monospace,Consolas,monospace;border-radius:10px;padding:10px;margin-top:10px;display:none}
+#out{height:190px;overflow:auto;white-space:pre-wrap}#term input{width:100%;background:transparent;border:0;color:#fff;font:inherit;outline:0;border-top:1px solid #345;padding-top:6px}
+.q button{display:block;width:100%;text-align:left;margin:6px 0}.good{border-color:var(--ok)!important}.bad{border-color:#d33!important}
+.hint{color:var(--mu);font-size:13px}code{background:var(--fl);padding:1px 5px;border-radius:4px}
+</style></head><body>
+<header><h1>🕹️ NetLab Quest</h1><span class="hint">Click floor to walk · click a device to open its console</span></header>
+<div class="wrap"><div class="pn"><div id="map"></div><p class="hint" id="loc"></p></div>
+<div class="pn"><div class="tabs"><button id="t1" class="on">Guide</button><button id="t2">Quiz</button></div><div id="guide"></div><div id="quiz" style="display:none"></div></div>
+<div class="pn" id="term" style="grid-column:1/-1;background:var(--tm)"><div style="color:#fff;margin-bottom:4px">Console: <b id="tn"></b> <button class="btn" id="cl" style="float:right;padding:1px 8px">✕</button></div><div id="out"></div><input id="in" autocomplete="off" autocapitalize="none" spellcheck="false"></div></div>
+<script>
+const $=id=>document.getElementById(id);
+const D={PC1:{k:'host',n:'PC1',ic:'💻',x:50,y:55,room:0,ip:'',m:'',gw:''},
+SW1:{k:'sw',n:'SW1',ic:'🔀',x:30,y:30,room:1,host:'SW1',vlans:{1:'default'}},
+R1:{k:'rt',n:'R1',ic:'📡',x:70,y:60,room:1,host:'R1',i:{'g0/0':{ip:'',m:'',up:0},'g0/1':{ip:'',m:'',up:0}}},
+SRV:{k:'host',n:'SRV',ic:'🖥️',x:50,y:55,room:2,ip:'',m:'',gw:''}};
+const RN=['Office','Wiring Closet','Server Room'];
+// ---- map
+const map=$('map');RN.forEach((r,i)=>map.insertAdjacentHTML('beforeend',`<div class="room" id="r${i}"><b>${r}</b></div>`));
+[33.3,66.6].forEach(x=>map.insertAdjacentHTML('beforeend',`<div class="door" style="left:${x}%"></div>`));
+for(const k in D){const d=D[k];$('r'+d.room).insertAdjacentHTML('beforeend',`<div class="dev" id="d${k}" style="left:${d.x}%;top:${d.y}%"><i>${d.ic}</i>${d.n}</div>`)}
+map.insertAdjacentHTML('beforeend','<div id="me" style="left:10%;top:50%">🧑‍💻</div>');
+let me={x:10,y:50},room=0,busy=0;const me$=$('me');
+const roomOf=x=>x<33.3?0:x<66.6?1:2;
+function walk(x,y,cb){const tr=roomOf(x),pts=[];let r=roomOf(me.x);
+ while(r!=tr){const dx=r<tr?33.3*(r+1):33.3*r;pts.push([dx-(r<tr?2:-2),50],[dx+(r<tr?2:-2),50]);r+=r<tr?1:-1}
+ pts.push([x,y]);let i=0;(function s(){if(i>=pts.length){cb&&cb();return}const[p,q]=pts[i++];me={x:p,y:q};me$.style.left=p+'%';me$.style.top=q+'%';setTimeout(s,470)})()}
+map.onclick=e=>{const dv=e.target.closest('.dev');const b=map.getBoundingClientRect();
+ if(dv){const k=dv.id.slice(1),d=D[k],ox=d.room*33.3+d.x/3;walk(ox-2.5,d.y+14,()=>openT(k));return}
+ const x=(e.clientX-b.left)/b.width*100,y=(e.clientY-b.top)/b.height*100;closeT();walk(x,Math.max(8,Math.min(92,y)),()=>{$('loc').textContent='📍 '+RN[roomOf(x)]})};
+// positions: devices live in own rooms (% relative to room), fix left in whole map already via room div
+// ---- terminal
+let cur=null,st={};const out=$('out');
+const pr=()=>{const d=D[cur],s=st[cur];if(d.k=='host')return d.n+'> ';const h=d.host;return s.mode=='user'?h+'> ':s.mode=='priv'?h+'# ':s.mode=='cfg'?h+'(config)# ':s.mode=='if'?h+'(config-if)# ':h+'(config-vlan)# '};
+function openT(k){cur=k;st[k]=st[k]||{mode:'user',log:`Welcome to ${D[k].n}. Type "help".\n`};$('tn').textContent=D[k].n;$('term').style.display='block';show();$('in').focus();document.querySelectorAll('.dev').forEach(e=>e.classList.toggle('cur',e.id=='d'+k))}
+function closeT(){$('term').style.display='none';cur=null;document.querySelectorAll('.dev').forEach(e=>e.classList.remove('cur'))}
+$('cl').onclick=closeT;
+function show(){out.textContent=st[cur].log+pr();out.scrollTop=1e5}
+$('in').addEventListener('keydown',e=>{if(e.key!='Enter')return;const v=e.target.value.trim();e.target.value='';const s=st[cur];const r=run(v);s.log+=pr()+v+'\n'+(r?r+'\n':'');show();upd()});
+const norm=x=>{const m=/^(g|gi|gigabitethernet)\s*0\/([01])$/i.exec(x);return m?'g0/'+m[2]:null};
+const net=(ip,m)=>{const a=ip.split('.').map(Number),b=m.split('.').map(Number);return a.map((v,i)=>v&b[i]).join('.')};
+const valid=s=>/^(\d{1,3}\.){3}\d{1,3}$/.test(s)&&s.split('.').every(n=>n<256);
+function owner(ip){for(const k in D){const d=D[k];if(d.k=='host'&&d.ip==ip)return[k,d];if(d.k=='rt')for(const f in d.i)if(d.i[f].ip==ip)return[k,d,f]}return null}
+function ping(src,ip){if(!valid(ip))return'% Bad address';const o=owner(ip);if(!o)return'Request timed out. (no device owns '+ip+')';
+ const s=D[src];if(s.k=='host'){if(!s.ip)return'Set an IP first: ip <addr> <mask> <gateway>';
+  const R=D.R1;const same=net(ip,s.m)==net(s.ip,s.m);
+  if(o[0]==src)return'Reply from '+ip+' (self)';
+  if(same&&o[1].k=='host')return'Reply from '+ip+' time<1ms ✔';
+  const gwI=Object.values(R.i).find(f=>f.ip&&f.ip==s.gw);
+  if(!s.gw)return'Destination unreachable: no default gateway set';
+  if(!gwI||net(s.gw,s.m)!=net(s.ip,s.m))return'Destination unreachable: gateway '+s.gw+' is not a router interface on your subnet';
+  if(!gwI.up)return'Destination unreachable: gateway interface is down (no shutdown?)';
+  if(o[1].k=='rt'){const f=R.i[o[2]];return f.up?'Reply from '+ip+' time=1ms ✔':'Request timed out (interface down)'}
+  const t=o[1];if(!t.gw||t.gw==''||!t.m)return'Request timed out (target has no gateway to reply)';
+  const tg=Object.values(R.i).find(f=>f.ip==t.gw&&net(f.ip,f.m)==net(t.ip,t.m));
+  if(!tg||!tg.up)return'Request timed out (target cannot route back)';return'Reply from '+ip+' time=2ms ✔'}
+ return'Router ping: '+(o?'Reply from '+ip+' ✔':'timed out')}
+function run(v){const d=D[cur],s=st[cur],a=v.split(/\s+/),c=(a[0]||'').toLowerCase();if(!c)return'';
+ if(c=='clear'){s.log='';return''}
+ if(d.k=='host'){
+  if(c=='help')return'ip <addr> <mask> <gateway>  set address\nshow ip   | ping <addr>';
+  if(c=='ip'){if(!valid(a[1])||!valid(a[2]))return'Usage: ip 192.168.1.10 255.255.255.0 192.168.1.1';d.ip=a[1];d.m=a[2];d.gw=valid(a[3]||'')?a[3]:'';return'Address set: '+d.ip+' '+d.m+' gw '+(d.gw||'none')}
+  if(c=='show'||c=='ipconfig')return`IP: ${d.ip||'-'}\nMask: ${d.m||'-'}\nGateway: ${d.gw||'-'}`;
+  if(c=='ping')return a[1]?ping(cur,a[1]):'Usage: ping <addr>';return'Unknown command. Try help'}
+ const m=s.mode;
+ if(c=='help')return'Modes: > user, # priv, (config), (config-if)\nTry: enable, configure terminal, hostname, interface g0/0, ip address A M, no shutdown, vlan 10, name X, show ip interface brief, show vlan brief, ping, exit, end';
+ if(c=='enable'&&m=='user'){s.mode='priv';return''}
+ if(c=='exit'){s.mode=m=='if'||m=='vlan'?'cfg':m=='cfg'?'priv':m=='priv'?'user':'user';return''}
+ if(c=='end'){if(m!='user')s.mode='priv';return''}
+ if((c=='configure'||c=='conf')&&m=='priv'){s.mode='cfg';return'Enter config commands.'}
+ if(c=='hostname'&&m=='cfg'){if(!a[1])return'% Incomplete';d.host=a[1];return''}
+ if(c=='show'&&m!='user'){const w=a.slice(1).join(' ');
+  if(d.k=='rt'&&/^ip int(erface)? b(rief)?$/.test(w))return'Interface   IP-Address     Status\n'+Object.keys(d.i).map(f=>f.padEnd(11)+' '+(d.i[f].ip||'unassigned').padEnd(14)+' '+(d.i[f].up?'up':'administratively down')).join('\n');
+  if(d.k=='sw'&&/^vlan b(rief)?$/.test(w))return'VLAN Name\n'+Object.keys(d.vlans).map(n=>n.padEnd(4)+' '+d.vlans[n]).join('\n');
+  return'% Unsupported show command'}
+ if(c=='show')return'% Go to privileged mode first: enable';
+ if(c=='ping'&&m!='user'&&d.k=='rt'){const o=owner(a[1]);return o?'!!!!! Success (5/5)':'..... Failed'}
+ if(d.k=='rt'){
+  if(c=='interface'&&m=='cfg'){const f=norm(a.slice(1).join(''));if(!f)return'% Invalid interface (use g0/0 or g0/1)';s.f=f;s.mode='if';return''}
+  if(m=='if'){const I=d.i[s.f];
+   if(c=='ip'&&a[1]=='address'){if(!valid(a[2])||!valid(a[3]))return'% Invalid input';I.ip=a[2];I.m=a[3];return''}
+   if(c=='no'&&a[1]=='shutdown'){I.up=1;return'%LINK-5-CHANGED: '+s.f+' changed state to up'}
+   if(c=='shutdown'){I.up=0;return''}}}
+ if(d.k=='sw'&&c=='vlan'&&m=='cfg'){if(!/^\d+$/.test(a[1]||''))return'% Usage: vlan <id>';s.v=a[1];if(!d.vlans[a[1]])d.vlans[a[1]]='VLAN'+a[1].padStart(4,'0');s.mode='vlan';return''}
+ if(d.k=='sw'&&c=='name'&&m=='vlan'){d.vlans[s.v]=a[1]||d.vlans[s.v];return''}
+ return'% Invalid input or wrong mode ('+(m=='user'?'try: enable':m=='priv'?'try: configure terminal':'check your mode')+')'}
+// ---- guide
+const R=D.R1;const up=(f,ip)=>R.i[f].ip==ip&&R.i[f].up;
+const L=[
+{t:'Give the PC an IP address',w:'Every device needs an address to talk. Walk to the 💻 PC1 in the Office and click it. Then type:',c:'ip 192.168.1.10 255.255.255.0 192.168.1.1',n:'IP = who you are, mask = which network you belong to, gateway = the door out of your network.',ok:()=>D.PC1.ip=='192.168.1.10'&&D.PC1.gw=='192.168.1.1'},
+{t:'Wake up the router’s LAN port',w:'Go to the Wiring Closet, click 📡 R1. Router ports are OFF by default. Type these one by one:',c:'enable\nconfigure terminal\ninterface g0/0\nip address 192.168.1.1 255.255.255.0\nno shutdown\nexit',n:'Modes matter: > user, # privileged, (config) global config, (config-if) interface.',ok:()=>up('g0/0','192.168.1.1')},
+{t:'Ping the gateway',w:'Back on PC1 test your first connection:',c:'ping 192.168.1.1',n:'Same subnet = direct. A reply proves layer 1–3 work to the router.',ok:()=>log('PC1','ping 192.168.1.1')},
+{t:'Build the server network',w:'On R1 (still in config mode, or type configure terminal again) set the second port:',c:'interface g0/1\nip address 10.0.0.1 255.255.255.0\nno shutdown\nend\nshow ip interface brief',n:'A router connects different networks – each port is in its own subnet.',ok:()=>up('g0/1','10.0.0.1')},
+{t:'Configure the server',w:'Go to the Server Room, open 🖥️ SRV:',c:'ip 10.0.0.10 255.255.255.0 10.0.0.1',n:'Its gateway is the router port on ITS network.',ok:()=>D.SRV.ip=='10.0.0.10'&&D.SRV.gw=='10.0.0.1'},
+{t:'Route across networks 🎉',w:'From PC1 ping the server:',c:'ping 10.0.0.10',n:'The packet goes PC → gateway → router → server and back. That is routing! If it fails, read the error – it tells you what is wrong.',ok:()=>log('PC1','ping 10.0.0.10',1)},
+{t:'Segment with a VLAN',w:'Open 🔀 SW1 in the Wiring Closet:',c:'enable\nconfigure terminal\nhostname CORE-SW\nvlan 10\nname SALES\nend\nshow vlan brief',n:'VLANs split one switch into separate broadcast domains.',ok:()=>D.SW1.vlans[10]&&D.SW1.vlans[10]=='SALES'}];
+function log(k,cmd,succ){const l=st[k]&&st[k].log||'';return l.includes('> '+cmd+'\n')&&(!succ||l.split('> '+cmd+'\n').slice(1).some(x=>x.startsWith('Reply')))}
+let step=0;
+function upd(){while(step<L.length&&L[step].ok())step++;draw()}
+function draw(){const g=$('guide');if(step>=L.length){g.innerHTML='<h3>🏆 Lab complete!</h3><p>You built a routed, segmented network. Take the Quiz tab to lock it in. Next upgrades: DHCP, ACLs, OSPF, NAT, Wi-Fi, firewall.</p>';return}
+ const s=L[step];g.innerHTML=`<div class="hint">Mission ${step+1} / ${L.length}</div><div class="bar"><div style="width:${step/L.length*100}%"></div></div><h3 style="margin:4px 0">${s.t}</h3><p>${s.w}</p><pre style="background:var(--tm);color:var(--tt);padding:8px;border-radius:8px;white-space:pre-wrap;overflow:auto">${s.c}</pre><p class="hint">💡 ${s.n}</p><button class="btn" onclick="skip()">Skip step</button>`}
+window.skip=()=>{step++;draw()};
+// ---- quiz
+const Q=[['What does a subnet mask define?',['The network part vs host part of an IP','The speed of a link','The VLAN name'],0],['Which device forwards traffic BETWEEN networks?',['Switch','Router','Hub'],1],['What is a default gateway?',['A DNS server','The router address used to leave your subnet','A switch port'],1],['Router interfaces by default are…',['Up','Administratively down','Deleted'],1],['A VLAN creates separate…',['Broadcast domains','Power circuits','Routers'],0],['Which command enters global config on a router?',['enable','configure terminal','show vlan'],1],['A ping reply proves…',['Connectivity at Layer 3','The cable is Cat6','Encryption'],0],['192.168.1.10/24 and 10.0.0.10/24 are in…',['Same subnet','Different subnets','No subnet'],1]];
+let qi=0,sc=0;
+function dq(){const z=$('quiz');if(qi>=Q.length){z.innerHTML=`<h3>Score: ${sc}/${Q.length}</h3><button class="btn p" onclick="qi=0;sc=0;dq()">Retry</button>`;return}
+ const q=Q[qi];z.innerHTML=`<div class="hint">Question ${qi+1}/${Q.length}</div><h3>${q[0]}</h3><div class="q">${q[1].map((o,i)=>`<button class="btn" data-i="${i}">${o}</button>`).join('')}</div><div id="fb"></div>`;
+ z.querySelectorAll('.q button').forEach(b=>b.onclick=()=>{const i=+b.dataset.i;z.querySelectorAll('.q button').forEach(x=>x.disabled=1);if(i==q[2]){sc++;b.classList.add('good')}else{b.classList.add('bad');z.querySelectorAll('.q button')[q[2]].classList.add('good')}$('fb').innerHTML='<button class="btn p" id="nx">Next</button>';$('nx').onclick=()=>{qi++;dq()}})}
+$('t1').onclick=()=>{$('guide').style.display='';$('quiz').style.display='none';$('t1').className='on';$('t2').className=''};
+$('t2').onclick=()=>{$('guide').style.display='none';$('quiz').style.display='';$('t2').className='on';$('t1').className='';dq()};
+draw();
+</script></body></html>
